@@ -63,12 +63,12 @@ class PositionWidget(QWidget):
         angle = math.radians(self.pos)
         dev = math.radians(3)
         r1, r2 = 215, 190
-        points = [
+        poly = QPolygonF([
             QPointF(cx + math.sin(angle) * r1, cy - math.cos(angle) * r1),
             QPointF(cx + math.sin(angle + dev) * r2, cy - math.cos(angle + dev) * r2),
             QPointF(cx + math.sin(angle - dev) * r2, cy - math.cos(angle - dev) * r2),
-        ]
-        painter.drawConvexPolygon(points)
+        ])
+        painter.drawConvexPolygon(poly)
 
         # Print current position
         w, h = 350, 100
