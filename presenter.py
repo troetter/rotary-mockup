@@ -147,7 +147,7 @@ class Presenter(QObject):
         self.interface_mode = InterfaceMode.READY
         
         self.timer = QTimer(self)
-        self.timer.setInterval(100)
+        self.timer.setInterval(25)
 
         self.left_stack.show_position()
         self.right_stack.show_mode_move()

@@ -271,7 +271,7 @@ class PositionWidget(QWidget):
 
         painter.setPen(self.direction_pen)
         painter.drawArc(self.direction_rect, start * 16, span * 16)
-        painter.drawLines([p1, p2, p1, p3])
+        painter.drawLines([QLineF(p1, p2), QLineF(p1, p3)])
 
 
     def draw_counter(self, painter, rect, field, label):
