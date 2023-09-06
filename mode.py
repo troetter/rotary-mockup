@@ -2,55 +2,62 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
 
+from ui_elements import LabeledBox
 
 class ModeSelectWidget(QWidget):
-    move_pressed = pyqtSignal()
+    item_pressed = pyqtSignal(str)
 
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
         self.pen = QPen(Qt.black, 1.5)
+        self.modes = []
+        self.rects = []
 
-        self.modes = [
-            ('MOVE', self.move_pressed, 0.3),
-        ]
+
+    def set_modes(self, mode_names):
+        self.modes = []
+        for name in mode_names:
+            box = LabeledBox('MODE')
+            box.set_label_pen(self.pen)
+            box.set_text_pen(self.pen)
+            box.set_text(name)
+            self.modes.append((name, box))
 
 
     def mousePressEvent(self, ev):
         if ev.button() == Qt.LeftButton:
-            for rect, text, sig in self.rects:
+            for name, rect in self.rects:
                 if rect.contains(ev.pos()):
-                    print('mouse press ' + text)
-                    sig.emit()
+                    print('mouse press mode ' + name)
+                    self.item_pressed.emit(name)
 
 
     def paintEvent(self, e):
         painter = QPainter(self)
         painter.setRenderHints(QPainter.HighQualityAntialiasing)
 
-        w, h = self.width(), self.height()
-        text_height = h * 0.1
-
-        font = painter.font()
-        font.setFamily('Monospace')
-        font.setPixelSize(int(text_height))
-        painter.setFont(font)
-        painter.setPen(self.pen)
+        h = self.height()
+        top = h * 0.3
+        step = h * 0.3
+        box_w = self.width()
+        box_h = h * 0.2
 
         self.rects = []
-        for text, sig, y_offset in self.modes:
-            rect = QRectF(0, h * y_offset, w, text_height)
-            painter.drawText(rect, Qt.AlignCenter, text)
-            self.rects.append((rect, text, sig))
+        for i, (name, box) in enumerate(self.modes):
+            rect = QRectF(0, top + i * step, box_w, box_h)
+            box.draw(painter, rect)
+            self.rects.append((name, rect))
 
 
-class MoveWidget(QWidget):
+class MovementWidget(QWidget):
     mode_pressed = pyqtSignal()
     start_pressed = pyqtSignal()
     stop_pressed = pyqtSignal()
     speed_increase = pyqtSignal()
     speed_decrease = pyqtSignal()
+    prev_target = pyqtSignal()
+    next_target = pyqtSignal()
 
 
     def __init__(self, *args, **kwargs):
@@ -58,6 +65,8 @@ class MoveWidget(QWidget):
 
         self.speed = 0.0
         self.speed_active = True
+        self.target_visible = True
+        self.target_active = True
         self.start_active = True
         self.stop_active = False
 
@@ -67,8 +76,6 @@ class MoveWidget(QWidget):
         gray = Qt.gray
         green = QColor(0, 196, 0)
         red = Qt.red
-
-        self.mode_string = "MOVE"
 
         self.pen_active = QPen(black, 1.5)
         self.brush_inactive = QBrush(gray)
@@ -80,11 +87,22 @@ class MoveWidget(QWidget):
         self.speed_btn_pen_active = QPen(black, 7.5, cap=Qt.RoundCap)
         self.speed_btn_pen_inactive = QPen(gray, 7.5, cap=Qt.RoundCap)
 
+        self.target_btn_pen_active = QPen(black, 12.5, cap=Qt.RoundCap)
+        self.target_btn_pen_inactive = QPen(gray, 12.5, cap=Qt.RoundCap)
+
         self.start_brush_active = QBrush(green)
         self.start_pen_active = QPen(green, 1.5)
 
         self.stop_brush_active = QBrush(red)
         self.stop_pen_active = QPen(red, 1.5)
+
+        self.mode_box = LabeledBox('MODE')
+        self.mode_box.set_label_pen(self.pen_active)
+        self.mode_box.set_text_pen(self.pen_active)
+
+
+    def set_mode(self, mode):
+        self.mode_box.set_text(mode)
 
 
     def set_speed(self, speed):
@@ -93,6 +111,14 @@ class MoveWidget(QWidget):
 
     def set_speed_active(self, active):
         self.speed_active = active
+
+
+    def set_target_active(self, active):
+        self.target_active = active
+
+
+    def set_target_visible(self, visible):
+        self.target_visible = visible
 
 
     def set_start_active(self, active):
@@ -106,20 +132,26 @@ class MoveWidget(QWidget):
     def mousePressEvent(self, ev):
         if ev.button() == Qt.LeftButton:
             if self.mode_rect.contains(ev.pos()):
-                print('mouse press mode')
+                print('mouse press main menu')
                 self.mode_pressed.emit()
-            elif self.start_rect.contains(ev.pos()):
-                print('mouse press start')
-                self.start_pressed.emit()
-            elif self.stop_rect.contains(ev.pos()):
-                print('mouse press stop')
-                self.stop_pressed.emit()
             elif self.speed_increase_rect.contains(ev.pos()):
                 print('mouse press plus')
                 self.speed_increase.emit()
             elif self.speed_decrease_rect.contains(ev.pos()):
                 print('mouse press minus')
                 self.speed_decrease.emit()
+            elif self.prev_rect.contains(ev.pos()):
+                print('mouse press prev')
+                self.prev_target.emit()
+            elif self.next_rect.contains(ev.pos()):
+                print('mouse press next')
+                self.next_target.emit()
+            elif self.start_rect.contains(ev.pos()):
+                print('mouse press start')
+                self.start_pressed.emit()
+            elif self.stop_rect.contains(ev.pos()):
+                print('mouse press stop')
+                self.stop_pressed.emit()
 
 
     def paintEvent(self, e):
@@ -128,23 +160,21 @@ class MoveWidget(QWidget):
 
         w, h = self.width(), self.height()
         self.mode_rect = QRectF(0, 0, w, h * 0.2)
-        self.speed_rect = QRectF(w * 0.12, h * 0.45, w * 0.76, h * 0.1)
+        self.speed_rect = QRectF(w * 0.12, h * 0.25, w * 0.76, h * 0.1)
+        self.prev_rect = QRectF(w * 0.1, h - w * 0.7, w * 0.2, w * 0.2)
+        self.next_rect = QRectF(w * 0.7, h - w * 0.7, w * 0.2, w * 0.2)
         self.start_rect = QRectF(w * 0.1, h - w * 0.3, w * 0.2, w * 0.2)
         self.stop_rect = QRectF(w * 0.7, h - w * 0.3, w * 0.2, w * 0.2)
 
         self.draw_mode(painter)
         self.draw_speed(painter)
-        self.draw_buttons(painter)
+        self.draw_target(painter)
+        self.draw_start(painter)
+        self.draw_stop(painter)
 
 
     def draw_mode(self, painter):
-        mode_px = self.mode_rect.height() / 2
-        font = painter.font()
-        font.setFamily('Monospace')
-        font.setPixelSize(int(mode_px))
-        painter.setFont(font)
-        painter.setPen(self.pen_active)
-        painter.drawText(self.mode_rect, Qt.AlignCenter, self.mode_string)
+        self.mode_box.draw(painter, self.mode_rect)
 
 
     def draw_speed(self, painter):
@@ -181,7 +211,6 @@ class MoveWidget(QWidget):
             painter.setBrush(self.brush_inactive)
         painter.drawRect(fill_rect)
 
-
         mtl = m_rect.topLeft()
         mtr = m_rect.topRight()
         mbl = m_rect.bottomLeft()
@@ -208,7 +237,48 @@ class MoveWidget(QWidget):
         painter.drawLines(lines)
 
 
-    def draw_buttons(self, painter):
+    def draw_target(self, painter):
+        if self.target_visible:
+            ptl = self.prev_rect.topLeft()
+            ptr = self.prev_rect.topRight()
+            pbl = self.prev_rect.bottomLeft()
+            pbr = self.prev_rect.bottomRight()
+            pcc = self.prev_rect.center()
+            ptc = (ptl + ptr) / 2
+            pbc = (pbl + pbr) / 2
+            pcl = (ptl + pbl) / 2
+
+            ntl = self.next_rect.topLeft()
+            ntr = self.next_rect.topRight()
+            nbl = self.next_rect.bottomLeft()
+            nbr = self.next_rect.bottomRight()
+            ncc = self.next_rect.center()
+            ntc = (ntl + ntr) / 2
+            nbc = (nbl + nbr) / 2
+            ncr = (ntr + nbr) / 2
+
+            lines = [
+                # prev
+                QLineF(pcl, ptc),
+                QLineF(pcl, pbc),
+                QLineF(pcc, ptr),
+                QLineF(pcc, pbr),
+
+                # next
+                QLineF(ncr, ntc),
+                QLineF(ncr, nbc),
+                QLineF(ncc, ntl),
+                QLineF(ncc, nbl),
+            ]
+
+            if self.target_active:
+                painter.setPen(self.target_btn_pen_active)
+            else:
+                painter.setPen(self.target_btn_pen_inactive)
+            painter.drawLines(lines)
+
+
+    def draw_start(self, painter):
         tl = self.start_rect.topLeft()
         tr = self.start_rect.topRight()
         bl = self.start_rect.bottomLeft()
@@ -227,20 +297,22 @@ class MoveWidget(QWidget):
             painter.setBrush(self.brush_inactive)
         painter.drawConvexPolygon(start_poly)
 
+
+    def draw_stop(self, painter):
         tl = self.stop_rect.topLeft()
         tr = self.stop_rect.topRight()
         bl = self.stop_rect.bottomLeft()
         br = self.stop_rect.bottomRight()
-        heavy, light = 0.7, 0.3
+        f1, f2 = 0.7, 0.3
         stop_poly = QPolygonF([
-            tl * heavy + tr * light,
-            tl * light + tr * heavy,
-            tr * heavy + br * light,
-            tr * light + br * heavy,
-            br * heavy + bl * light,
-            br * light + bl * heavy,
-            bl * heavy + tl * light,
-            bl * light + tl * heavy,
+            tl * f1 + tr * f2,
+            tl * f2 + tr * f1,
+            tr * f1 + br * f2,
+            tr * f2 + br * f1,
+            br * f1 + bl * f2,
+            br * f2 + bl * f1,
+            bl * f1 + tl * f2,
+            bl * f2 + tl * f1,
 
         ])
 
@@ -251,3 +323,5 @@ class MoveWidget(QWidget):
             painter.setPen(self.pen_inactive)
             painter.setBrush(self.brush_inactive)
         painter.drawConvexPolygon(stop_poly)
+
+

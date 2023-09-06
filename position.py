@@ -3,6 +3,8 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
 
+from ui_elements import LabeledBox
+
 import math
 
 class PositionWidget(QWidget):
@@ -28,7 +30,9 @@ class PositionWidget(QWidget):
         self.arrow_angle = 5
 
         green = QColor(0, 196, 0)
+        red = QColor(255, 0, 0)
         black = Qt.black
+        white = Qt.white
         gray = Qt.gray
 
         self.arc_pen = QPen(black, 3)
@@ -38,35 +42,55 @@ class PositionWidget(QWidget):
         self.target_pen = QPen(green, 1.0)
         self.target_brush = QBrush(green)
 
-        self.certain_arrow_pen = QPen(green, 1.5)
-        self.certain_arrow_brush = QBrush(green)
-        self.uncertain_arrow_pen = QPen(gray, 1.5)
-        self.uncertain_arrow_brush = QBrush(gray)
-        self.certain_counter_pen = QPen(black, 1.5)
-        self.uncertain_counter_pen = QPen(gray, 1.5)
+        self.home_arrow_pen = QPen(green, 1.5)
+        self.home_arrow_brush = QBrush(green)
+        self.away_arrow_pen = QPen(red, 1.5)
+        self.away_arrow_brush = QBrush(red)
+        self.data_valid_pen = QPen(black, 1.5)
+        self.data_entry_pen = QPen(gray, 1.5)
+        self.data_entry_brush = QBrush(white)
         self.label_pen = QPen(black, 1.5)
 
         self.power_off_pen = QPen(gray, 7.5, cap=Qt.RoundCap)
         self.power_on_pen = QPen(green, 7.5, cap=Qt.RoundCap)
         self.direction_pen = QPen(black, 4.5, cap=Qt.RoundCap)
 
+        self.position_value = None
         self.position_field = None
+        self.position_box = LabeledBox('POSITION')
+        self.target_value = None
         self.target_field = None
-        self.targets = []
+        self.target_box = LabeledBox('TARGET')
+        self.divisions = []
 
-        #self.set_position(0.0, True, False, 0, 0)
-        #self.current_target = None
+        for box in [self.position_box, self.target_box]:
+            box.set_label_pen(self.label_pen)
+            box.set_text_pen(self.data_valid_pen)
+            box.set_shaded_text_pen(self.data_entry_pen)
+            box.set_entry_brush(self.data_entry_brush)
 
         self.powered = False
         self.direction_cw = True
 
 
-    def set_position(self, position_field):
-        self.position_field = position_field
+    def set_position_value(self, position_value):
+        self.position_value = position_value
 
 
-    def set_target(self, target_field):
-        self.target_field = target_field
+    def set_position_field(self, position_string, show_shaded, show_entry):
+        self.position_field = position_string, show_shaded, show_entry
+
+
+    def set_target_value(self, target_value):
+        self.target_value = target_value
+
+
+    def set_target_field(self, target_string, show_shaded, show_entry):
+        self.target_field = target_string, show_shaded, show_entry
+
+
+    def set_divisions(self, divisions):
+        self.divisions = divisions
 
 
     def set_power_state(self, powered):
@@ -93,7 +117,6 @@ class PositionWidget(QWidget):
                 self.direction_pressed.emit()
 
 
-
     def paintEvent(self, e):
         painter = QPainter(self)
         painter.setRenderHints(QPainter.HighQualityAntialiasing)
@@ -101,7 +124,7 @@ class PositionWidget(QWidget):
         self.size = min(self.width(), self.height())
         self.cx = self.size / 2
         self.cy = self.size / 2
-        self.cnt_w = self.size * 0.75
+        self.cnt_w = self.size * 0.72
         self.cnt_h = self.size * 0.2
         self.cnt_m = self.size * 0.05
         self.sym_w = self.size * 0.08
@@ -178,15 +201,15 @@ class PositionWidget(QWidget):
         painter.setPen(self.target_ring_pen)
         r1 = self.size / 2 - self.rose_margin / 2
         r2 = ring_size / 2
-        for tgt in self.targets:
-            angle = math.radians(tgt)
+        for div in self.divisions:
+            angle = math.radians(div)
             x = self.cx + math.sin(angle) * r1
             y = self.cy - math.cos(angle) * r1
             painter.drawEllipse(QPointF(x, y), r2, r2)
 
         # Draw current target
-        if self.target_field is not None:
-            target = self.target_field.get_position()
+        if self.target_value is not None:
+            target = self.target_value
             painter.setBrush(self.target_brush)
             painter.setPen(self.target_pen)
             r2 = target_size / 2
@@ -199,17 +222,17 @@ class PositionWidget(QWidget):
 
     def draw_position_arrow(self, painter):
         # Draw current position
-        if self.position_field is not None:
-            value = self.position_field.get_position()
-            uncertain, _, _, _ = self.position_field.get_uncertainty()
-            if uncertain:
-                painter.setBrush(self.uncertain_arrow_brush)
-                painter.setPen(self.uncertain_arrow_pen)
+        position = self.position_value
+        target = self.target_value
+        if position is not None:
+            if target is not None and position == target:
+                painter.setBrush(self.home_arrow_brush)
+                painter.setPen(self.home_arrow_pen)
             else:
-                painter.setBrush(self.certain_arrow_brush)
-                painter.setPen(self.certain_arrow_pen)
+                painter.setBrush(self.away_arrow_brush)
+                painter.setPen(self.away_arrow_pen)
 
-            angle = math.radians(value)
+            angle = math.radians(position)
             dev = math.radians(self.arrow_angle / 2)
             outer_radius = self.size / 2 - self.rose_margin - self.arrow_margin
             inner_radius = outer_radius - self.arrow_length
@@ -226,19 +249,23 @@ class PositionWidget(QWidget):
 
 
     def draw_position_counter(self, painter):
-        if self.position_field is not None:
-            self.draw_counter(painter,
-                              self.position_rect,
-                              self.position_field,
-                              'POSITION')
+        if self.position_value is not None:
+            string, shaded, entry = self.position_field
+            rect = self.position_rect
+            self.position_box.set_text(' ' + string + '°')
+            self.position_box.set_entry(entry)
+            self.position_box.set_shaded(shaded)
+            self.position_box.draw(painter, rect)
 
 
     def draw_target_counter(self, painter):
-        if self.target_field is not None:
-            self.draw_counter(painter,
-                              self.target_rect,
-                              self.target_field,
-                              'TARGET')
+        if self.target_value is not None:
+            string, shaded, entry = self.target_field
+            rect = self.target_rect
+            self.target_box.set_text(' ' + string + '°')
+            self.target_box.set_entry(entry)
+            self.target_box.set_shaded(shaded)
+            self.target_box.draw(painter, rect)
 
 
     def draw_symbols(self, painter):
@@ -272,86 +299,3 @@ class PositionWidget(QWidget):
         painter.setPen(self.direction_pen)
         painter.drawArc(self.direction_rect, start * 16, span * 16)
         painter.drawLines([QLineF(p1, p2), QLineF(p1, p3)])
-
-
-    def draw_counter(self, painter, rect, field, label):
-        label_px = self.cnt_h * 0.25
-        counter_px = self.cnt_h * 0.7
-        font = painter.font()
-        font.setFamily('Monospace')
-
-        font.setPixelSize(int(label_px))
-        painter.setFont(font)
-        painter.setPen(self.label_pen)
-        painter.drawText(rect, Qt.AlignHCenter + Qt.AlignTop, label)
-
-        font.setPixelSize(int(counter_px))
-        painter.setFont(font)
-
-        value = field.get_position()
-        ret = field.get_uncertainty()
-        uncertain, valid_dec_sep, num_valid_int, num_valid_frac = ret
-
-        if value is None:
-            val_str = '---.---'
-            pad_str = ' ' * len(val_str)
-            painter.setPen(self.uncertain_counter_pen)
-            painter.drawText(rect,
-                             Qt.AlignHCenter + Qt.AlignBottom,
-                             ' ' + val_str + ' ')
-            painter.setPen(self.certain_counter_pen)
-            painter.drawText(rect,
-                             Qt.AlignHCenter + Qt.AlignBottom,
-                             ' ' + pad_str + '°')
-
-        elif uncertain:
-            fraction, integer = math.modf(value)
-
-            int_str = f'{int(integer):3d}'
-            if num_valid_int:
-                int_str_cert = int_str[-num_valid_int:]
-                int_str_uncert = int_str[:-num_valid_int]
-            else:
-                int_str_cert = ''
-                int_str_uncert = int_str
-            
-            frac_str = f'{int(round(fraction * 1000)):03d}'
-            if num_valid_frac:
-                frac_str_cert = frac_str[:num_valid_frac]
-                frac_str_uncert = frac_str[num_valid_frac:]
-            else:
-                frac_str_cert = ''
-                frac_str_uncert = frac_str
-            
-            if valid_dec_sep:
-                dec_cert = '.'
-                dec_uncert = ' '
-            else:
-                dec_cert = ' '
-                dec_uncert = '.'
-
-            str_cert = int_str_cert + dec_cert + frac_str_cert
-            pfx_cert = ' ' * len(int_str_uncert)
-            sfx_cert = ' ' * len(frac_str_uncert)
-            padded_str_cert =  pfx_cert + str_cert + sfx_cert
-
-            int_sfx_uncert = ' ' * len(int_str_cert)
-            frac_pfx_uncert = ' ' * len(frac_str_cert)
-            mid_uncert = int_sfx_uncert + dec_uncert + frac_pfx_uncert
-            padded_str_uncert = int_str_uncert + mid_uncert + frac_str_uncert
-
-            painter.setPen(self.uncertain_counter_pen)
-            painter.drawText(rect,
-                             Qt.AlignHCenter + Qt.AlignBottom,
-                             ' ' + padded_str_uncert + ' ')
-
-            painter.setPen(self.certain_counter_pen)
-            painter.drawText(rect,
-                             Qt.AlignHCenter + Qt.AlignBottom,
-                             ' ' + padded_str_cert + '°')
-
-        else:
-            val_str = f'{value:8.3f}°'
-            painter.setPen(self.certain_counter_pen)
-            painter.drawText(rect, Qt.AlignHCenter + Qt.AlignBottom, val_str)
-
