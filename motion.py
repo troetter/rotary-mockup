@@ -88,7 +88,8 @@ class Tmc5160Controller(object):
         reg_offset = reg_value - self.setpoint_reg
         step_in_rev = reg_offset % self.steps_per_rev
         angle_offset = step_in_rev * 360.0 / self.steps_per_rev
-        pos = math.fmod(self.setpoint_angle + angle_offset, 360.0)
+        angle = self.setpoint_angle + angle_offset
+        pos = math.fmod(round(angle, 3), 360.0) # TODO: Fix this
         print(f'Pos  XACTUAL: {reg_value:08x}')
         print(f'reg: {reg_value}, offs: {reg_offset}, step: {step_in_rev}, ang: {angle_offset}, pos: {pos}')
         return pos
