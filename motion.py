@@ -1,275 +1,341 @@
-import tmc5160
+from enums import MotionState, TargetMode, Direction
+from configuration import Configuration
+from motor import Motor
 
-import math
-from datetime import datetime
+class MotionController(object):
+    def __init__(self, motor: Motor, config: Configuration):
+        self.motor = motor
+        self.config = config
 
-class Tmc5160Controller(object):
-    def __init__(self, config, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        
-        self.read_config(config)
-        self.tmc = tmc5160.TMC5160(
-            spibus=self.spi_bus,
-            spics=self.spi_cs,
-            spibps=self.spi_bitrate,
-            enapin=self.enable_pin)
+        self.motion_state = MotionState.UNPOWERED
+        self.target_mode = TargetMode.ABSOLUTE
 
-        self.tmc.set_register_values(self.init_regs)
-        self.set_position(0)
+        self.target_reg = 0
 
-        self.position = 0
-        self.target = 0
-        self.reg_target = 0
+        self.abs_target = 0.0
+        self.rel_target = 0.0
+        self.div_target = 0
+        self.div_parameters = 2, 0, 360
+        self.divs = [0, 180]
 
+        self.direction = Direction.CW
+        self.speed = self.config.default_speed
 
-    def read_config(self, config):
-        # Read mechanical properties
-        mech = config['Mechanical']
-        gearing = mech.getfloat('motor_revs_per_spindle_rev')
-        fullsteps = mech.getint('motor_fullsteps_per_rev')
-        microsteps = mech.getint('motor_microsteps_per_fullstep')
-        self.steps_per_rev = int(gearing * fullsteps * microsteps)
-
-        # Driver connection
-        elec = config['Electrical']
-        self.spi_bus = elec.getint('spi_bus')
-        self.spi_cs = elec.getint('spi_cs')
-        self.spi_bitrate = elec.getint('spi_bitrate')
-        self.enable_pin = elec['enable_pin']
-
-        # Read speed settings
-        speed = config['Speed']
-        num_speeds = speed.getint('num_speeds')
-        self.default_speed = speed.getint('default')
-        self.current_speed = self.default_speed
-        self.speeds = {}
-        for i in range(num_speeds):
-            section = config[f'Speed.{i}']
-            keys = ['A1', 'V1', 'AMAX', 'VMAX', 'DMAX', 'D1', 'VSTOP']
-            data = {k.upper(): {k.upper(): section.getint(k)} for k in keys}
-            self.speeds[i] = data
-
-        # Read register settings
-        self.init_regs = {}
-        self.enable_regs = {}
-        self.disable_regs = {}
-        for s in config.sections():
-            if s.startswith('reg'):
-                _, phase, reg = s.split('.')
-                section = config[s]
-                data = {k.upper(): section.getint(k) for k in section}
-                if phase == 'init':
-                    self.init_regs[reg] = data
-                elif phase == 'enable':
-                    self.enable_regs[reg] = data
-                elif phase == 'disable':
-                    self.disable_regs[reg] = data
+        self.setup_motor()
 
 
-    def moving(self):
-        mov = []
-        for i in range(10):
-            reg_value = self.tmc.read_register_value('DRV_STATUS')
-            mov.append((reg_value & 0x8000_0000) == 0)
+    def event_periodic(self):
+        self.motor.update_state()
+        self.evaluate_state_transition()
 
-        if all(mov):
-            print('all moving')
-        elif any(mov):
-            reg_xactual = self.tmc.read_register_value('XACTUAL')
-            at_tgt = self.reg_target == reg_xactual
-            print(f'====== {sum(mov)} moving, at target: {at_tgt}')
+
+    def event_power(self):
+        if self.motion_state == MotionState.UNPOWERED:
+            self.motor.set_power_on()
         else:
-            print('all stationary')
-        return any(mov)
+            self.motor.set_power_off()
+        self.evaluate_state_transition()
 
 
-    def get_position(self):
-        reg_value = self.tmc.read_register_value('XACTUAL')
-        reg_offset = reg_value - self.setpoint_reg
-        step_in_rev = reg_offset % self.steps_per_rev
-        angle_offset = step_in_rev * 360.0 / self.steps_per_rev
-        angle = self.setpoint_angle + angle_offset
-        pos = math.fmod(round(angle, 3), 360.0) # TODO: Fix this
-        print(f'Pos  XACTUAL: {reg_value:08x}')
-        print(f'reg: {reg_value}, offs: {reg_offset}, step: {step_in_rev}, ang: {angle_offset}, pos: {pos}')
-        return pos
-
-
-    def get_target(self):
-        return self.target
-
-
-    def get_speed(self):
-        return (self.current_speed + 1) / len(self.speeds)
-
-
-    def increase_speed(self):
-        if self.current_speed < len(self.speeds) - 1:
-            self.current_speed += 1
-
-
-    def decrease_speed(self):
-        if self.current_speed > 0:
-            self.current_speed -= 1
-
-
-    def set_position(self, position):
-        print(f'Setting position to {position}')
-        if not self.moving():
-            self.setpoint_reg = self.tmc.read_register_value('XACTUAL')
-            while position < 0.0:
-                position += 360.0
-            self.setpoint_angle = math.fmod(position, 360)
-        else:
-            raise RuntimeError('unable to set position while moving')
-
-
-    def set_target(self, target):
-        if not self.moving():
-            while target < 0.0:
-                target += 360.0
-            self.target = math.fmod(target, 360)
-        else:
-            raise RuntimeError('unable to set target while moving')
-
-
-    def set_power_on(self):
-        # TODO: fix
-        self.tmc.set_register_values(self.enable_regs)
-        self.tmc.enable()
-        self.power_on = True
-
-
-    def set_power_off(self):
-        # TODO: fix
-        self.tmc.disable()
-        self.tmc.set_register_values(self.disable_regs)
-        self.power_on = False
-
-
-    def move(self, direction_cw):
-        # TODO: fix
-        if self.power_on and not self.moving():
-            reg_actual = self.tmc.read_register_value('XACTUAL')
-            reg_offset = reg_actual - self.setpoint_reg
-            current_step = reg_offset % self.steps_per_rev
-            target_step = int(round((self.target - self.setpoint_angle) * self.steps_per_rev / 360.0))
-
-            if direction_cw:
-                delta = (target_step - current_step) % self.steps_per_rev
-            else:
-                delta = -((current_step - target_step) % self.steps_per_rev)
-
-            reg_target = (reg_actual + delta) % 2**32
-
-            reg_values = self.speeds[self.current_speed].copy()
-            reg_values['RAMPMODE'] = {'RAMPMODE': 0}
-            reg_values['XTARGET'] = {'XTARGET': reg_target}
-            self.reg_target = reg_target
-            self.tmc.set_register_values(reg_values)
-            print(f'Move XACTUAL: {reg_actual:08x} XTARGET: {reg_target:08x}')
-            print(f'pos: {reg_actual}, delta: {delta}, tgt: {reg_target}')
-
-
-    def stop(self):
-        # TODO: fix
-        pass
-
-
-class FakeMotorController(object):
-    def __init__(self, config, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        
-        self.power_on = False
-        self.position = 0
-        self.target = 0
-
-        self.speeds = [
-            0.1,
-            1.0,
-            10.0,
-            30.0,
+    def event_start_stop(self):
+        valid_states = [
+            MotionState.READY_TO_MOVE,
+            MotionState.MOVING
         ]
 
-        self.speed = len(self.speeds) - 2
-        self.movement = None
+        if self.motion_state not in valid_states:
+            raise RuntimeError('Invalid event for state')
 
-
-    def moving(self):
-        return self.movement is not None
-
-
-    def get_position(self):
-        if self.movement is None:
-            return self.position
+        if self.motion_state == MotionState.READY_TO_MOVE:
+            self.start_reg = self.motor.get_position()
+            tgt_reg = self.target_reg
+            speed = self.speed * self.steps_per_deg
+            self.motor.start_move_to_position(tgt_reg, speed)
         else:
-            start_time, speed, to_go = self.movement
-            elapsed_time = datetime.now() - start_time
-            distance_moved = elapsed_time.total_seconds() * speed
-            if abs(distance_moved) >= abs(to_go):
-                self.position = self.target
-                self.movement = None
-                return self.position
-            else:
-                return math.fmod(self.position + distance_moved + 360, 360)
+            self.motor.stop()
+        self.evaluate_state_transition()
 
 
-    def get_target(self):
-        return self.target
+    def event_position_set(self, position):
+        valid_states = [
+            MotionState.UNPOWERED,
+            MotionState.IDLE,
+            MotionState.READY_TO_MOVE,
+        ]
+
+        if self.motion_state not in valid_states:
+            raise RuntimeError('Invalid event for state')
+
+        motor_pos = self.motor.get_position()
+        self.position_anchor = position, motor_pos
+        self.calculate_target_reg()
+        self.evaluate_state_transition()
+
+
+    def event_target_mode_set(self, mode):
+        valid_states = [
+            MotionState.UNPOWERED,
+            MotionState.IDLE,
+            MotionState.READY_TO_MOVE,
+        ]
+
+        if self.motion_state not in valid_states:
+            raise RuntimeError('Invalid event for state')
+
+        self.target_mode = mode
+        self.calculate_target_reg()
+        self.evaluate_state_transition()
+
+
+    def event_target_set(self, parameter):
+        valid_states = [
+            MotionState.UNPOWERED,
+            MotionState.IDLE,
+            MotionState.READY_TO_MOVE,
+        ]
+
+        if self.motion_state not in valid_states:
+            raise RuntimeError('Invalid event for state')
+
+        if self.target_mode == TargetMode.ABSOLUTE:
+            self.abs_target = parameter
+        elif self.target_mode == TargetMode.RELATIVE:
+            self.rel_target = parameter
+        elif self.target_mode == TargetMode.DIVISION:
+            self.div_target = parameter
+
+        self.calculate_target_reg()
+        self.evaluate_state_transition()
+
+
+    def event_division_set(self, num_divs, start_angle, extent):
+        valid_states = [
+            MotionState.UNPOWERED,
+            MotionState.IDLE,
+            MotionState.READY_TO_MOVE,
+        ]
+
+        if self.motion_state not in valid_states:
+            raise RuntimeError('Invalid event for state')
+
+        if extent == 360.0:
+            d = num_divs
+        else:
+            d = num_divs - 1
+        r = range(num_divs)
+        s = start_angle
+        e = extent
+        self.divs = [(i * e / d + s) % 360.0 for i in r]
+        self.div_target = 0
+        self.div_parameters = num_divs, start_angle, extent
+        self.calculate_target_reg()
+        self.evaluate_state_transition()
+
+
+    def event_direction_set(self, direction):
+        valid_states = [
+            MotionState.UNPOWERED,
+            MotionState.IDLE,
+            MotionState.READY_TO_MOVE,
+        ]
+
+        if self.motion_state not in valid_states:
+            raise RuntimeError('Invalid event for state')
+
+        self.direction = direction
+        self.calculate_target_reg()
+
+
+    def event_speed_set(self, speed):
+        valid_states = [
+            MotionState.UNPOWERED,
+            MotionState.IDLE,
+            MotionState.READY_TO_MOVE,
+        ]
+
+        if self.motion_state not in valid_states:
+            raise RuntimeError('Invalid event for state')
+
+        self.speed = speed
+
+
+    def get_target_mode(self):
+        return self.target_mode
+
+
+    def get_abs_target(self):
+        return self.abs_target
+
+
+    def get_rel_target(self):
+        abs_angle = self.reg_to_angle(self.target_reg)
+        rel_angle = self.rel_target
+        return abs_angle, rel_angle
+
+
+    def get_div_target(self):
+        angle = self.reg_to_angle(self.target_reg)
+        index = self.div_target
+        return angle, index
+
+
+    def get_div_parameters(self):
+        return self.div_parameters
+
+
+    def get_divs(self):
+        if self.target_mode == TargetMode.DIVISION:
+            return self.divs
+        else:
+            return []
+
+
+    def get_position_angle(self):
+        reg = self.motor.get_position()
+        return self.reg_to_angle(reg) % 360
+
+
+    def get_direction(self):
+        return self.direction
 
 
     def get_speed(self):
-        return (self.speed + 1) / len(self.speeds)
+        return self.speed
 
 
-    def increase_speed(self):
-        if self.speed < len(self.speeds) - 1:
-            self.speed += 1
+    def get_motion_state(self):
+        return self.motion_state
 
 
-    def decrease_speed(self):
-        if self.speed > 0:
-            self.speed -= 1
+    def get_progress(self):
+        enabled = self.motion_state in [
+            MotionState.MOVING,
+            MotionState.STOPPING,
+        ]
+        if enabled:
+            start = self.start_reg
+            current = self.motor.get_position()
+            target = self.target_reg
+
+            total_movement = abs(target - start)
+            current_movement = abs(current - start)
+            progress = int(100 * current_movement / total_movement)
+        else:
+            progress = 0
+
+        return enabled, progress
 
 
-    def set_position(self, position):
-        self.position = math.fmod(position, 360)
+    def setup_motor(self):
+        steps_per_deg = self.config.steps_per_rev / 360
+        accel = self.config.acceleration * steps_per_deg
+        start_speed = self.config.start_speed * steps_per_deg
+
+        self.motor.set_acceleration(accel)
+        self.motor.set_start_speed(start_speed)
+        motor_pos = self.motor.get_position()
+        self.position_anchor = 0, motor_pos
+        self.steps_per_deg = steps_per_deg
 
 
-    def set_target(self, target):
-        self.target = math.fmod(target, 360)
+    def evaluate_state_transition(self):
+        motor_energized = self.motor.is_energized()
+        motor_stationary = not self.motor.is_moving()
+        motor_stopping = self.motor.is_stopping()
+        destination_reached = self.motor.get_position() == self.target_reg
 
+        old_state = self.motion_state
+        new_state = old_state
 
-    def set_power_on(self):
-        self.power_on = True
-
-
-    def set_power_off(self):
-        self.power_on = False
-
-
-    def move(self, direction_cw):
-        if self.power_on and self.position != self.target:
-            start_time = datetime.now()
-            if direction_cw:
-                speed = self.speeds[self.speed]
-                to_go = math.fmod(self.target - self.position + 360, 360)
+        if not motor_energized:
+            new_state = MotionState.UNPOWERED
+        elif motor_stationary:
+            if destination_reached:
+                new_state = MotionState.IDLE
             else:
-                speed = -self.speeds[self.speed]
-                to_go = math.fmod(self.target - self.position - 360, 360)
+                new_state = MotionState.READY_TO_MOVE
+        elif motor_stopping:
+            new_state = MotionState.STOPPING
+        elif old_state == MotionState.READY_TO_MOVE:
+            new_state = MotionState.MOVING
 
-            self.movement = (start_time, speed, to_go)
+        is_stationary = new_state in [
+            MotionState.UNPOWERED,
+            MotionState.IDLE,
+            MotionState.READY_TO_MOVE,
+        ]
+        was_moving = old_state in [
+            MotionState.MOVING,
+            MotionState.STOPPING,
+        ]
+        rel_tgt_mode = self.target_mode == TargetMode.RELATIVE
+
+        if was_moving and is_stationary and rel_tgt_mode:
+            self.rel_target = 0
+            self.calculate_target_reg()
+
+        self.motion_state = new_state
 
 
-    def stop(self):
-        if self.movement is not None:
-            start_time, speed, to_go = self.movement
-            elapsed_time = datetime.now() - start_time
-            distance_moved = elapsed_time.total_seconds() * speed
-            if abs(distance_moved) >= abs(to_go):
-                self.position = self.target
+    def calculate_target_reg(self):
+        if self.target_mode == TargetMode.ABSOLUTE:
+            tgt_cw, tgt_ccw = self.find_target_candidates(self.abs_target)
+            if self.direction == Direction.CW:
+                target_reg = tgt_cw
             else:
-                self.position += distance_moved
-                self.position = math.fmod(self.position + 360, 360)
-            self.movement = None
+                target_reg = tgt_ccw
+        elif self.target_mode == TargetMode.RELATIVE:
+            diff_reg = self.find_rel_target(self.rel_target)
+            if self.direction == Direction.CCW:
+                diff_reg = -diff_reg
+            position_reg = self.motor.get_position()
+            target_reg = position_reg + diff_reg
+        elif self.target_mode == TargetMode.DIVISION:
+            tgt_angle = self.divs[self.div_target]
+            tgt_cw, tgt_ccw = self.find_target_candidates(tgt_angle)
+            position_reg = self.motor.get_position()
+            diff_cw = abs(position_reg - tgt_cw)
+            diff_ccw = abs(position_reg - tgt_ccw)
+            if(diff_cw <= diff_ccw):
+                target_reg = tgt_cw
+            else:
+                target_reg = tgt_ccw
 
+        self.target_reg = target_reg
+
+
+    def find_target_candidates(self, target_angle):
+        anchor_angle, anchor_reg = self.position_anchor
+        steps_per_rev = self.config.steps_per_rev
+        position_reg = self.motor.get_position()
+        target_reg = self.angle_to_reg(target_angle)
+        revs = int(position_reg / steps_per_rev)
+
+        tgt_cw = (revs - 1) * steps_per_rev + target_reg
+        while tgt_cw < position_reg:
+            tgt_cw += steps_per_rev
+
+        tgt_ccw = (revs + 1) * steps_per_rev + target_reg
+        while tgt_ccw > position_reg:
+            tgt_ccw -= steps_per_rev
+
+        return tgt_cw, tgt_ccw
+
+
+    def find_rel_target(self, rel_target):
+        steps_per_rev = self.config.steps_per_rev
+        position_reg = self.motor.get_position()
+        diff_reg = int(round(rel_target * steps_per_rev / 360))
+        return diff_reg
+
+
+    def angle_to_reg(self, angle):
+        anch_angle, anch_reg = self.position_anchor
+        steps_per_rev = self.config.steps_per_rev
+        return int(round((angle - anch_angle) * steps_per_rev / 360)) + anch_reg
+
+
+    def reg_to_angle(self, reg):
+        anch_angle, anch_reg = self.position_anchor
+        steps_per_rev = self.config.steps_per_rev
+        return ((reg - anch_reg) * 360 / steps_per_rev) + anch_angle

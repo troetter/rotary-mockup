@@ -1,450 +1,264 @@
 from PyQt5.QtCore import *
 from enum import Enum
-
-
-class MovementMode(Enum):
-    MANUAL_MOVE = 'MANUAL'
-    DIVISION = 'DIVISION'
-
-
-class MotorMode(Enum):
-    UNPOWERED_IDLE = 1
-    POWERED_IDLE = 2
-    MOVING = 3
-
-
-class InterfaceMode(Enum):
-    READY = 1
-    DATA_ENTRY = 2
-
-
-class AngleField(object):
-    def __init__(self, value=0.0, minimum=0.0, maximum=359.999, num_decimal=3, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.value = value
-        self.minimum = minimum
-        self.maximum = maximum
-        self.num_decimal = num_decimal
-        self.num_integer = max(len(str(int(minimum))), len(str(int(maximum))))
-        self.entry = False
-        self.int_part = None
-        self.decimal_separator_pressed = False
-        self.frac_part = None
-
-
-    def start_entering(self):
-        self.old_value = self.value
-        self.entry = True
-        self.int_part = None
-        self.decimal_separator_pressed = False
-        self.frac_part = None
-
-
-    def key_pressed(self, character):
-        if len(character) != 1 or character not in '0123456789.⌫⏎':
-            msg = 'Bad character keypress: ' + character
-            raise RuntimeError(msg)
-
-        done = False
-        if character == '⏎':
-            done = True
-        elif character == '⌫':
-            if self.decimal_separator_pressed:
-                if self.frac_part is None:
-                    self.decimal_separator_pressed = False
-                elif len(self.frac_part) > 1:
-                    self.frac_part = self.frac_part[:-1]
-                else:
-                    self.frac_part = None
-            else:
-                if self.int_part is not None and len(self.int_part) > 1:
-                    self.int_part = self.int_part[:-1]
-                else:
-                    self.int_part = None
-        elif character == '.':
-            self.decimal_separator_pressed = True
-            if self.int_part is None:
-                self.int_part = '0'
-        elif self.decimal_separator_pressed:
-            if self.frac_part is None:
-                self.frac_part = character
-            elif len(self.frac_part) < self.num_decimal:
-                i = self.int_part
-                f = self.frac_part + character
-                if float(f'{i}.{f}') <= self.maximum:
-                    self.frac_part += character
-        else:
-            if self.int_part is None or self.int_part == '0':
-                self.int_part = character
-            elif int(self.int_part + character) <= self.maximum:
-                self.int_part += character
-
-        return self.validate_input(done)
-
-
-    def validate_input(self, done):
-        nothing_entered = (self.int_part is None and 
-                           self.frac_part is None and
-                           not self.decimal_separator_pressed)
-
-        if nothing_entered:
-            self.value = self.old_value
-        else:
-            i = self.int_part if self.int_part is not None else '0'
-            f = self.frac_part if self.frac_part is not None else '0'
-            self.value = float(f'{i}.{f}')
-
-        self.entry = not done
-        return done
-
-
-    def set_value(self, value):
-        rounded = round(value, self.num_decimal)
-        if rounded < self.minimum or rounded > self.maximum:
-            raise ValueError('Value out of range')
-        self.value = rounded
-
-
-    def get_value(self):
-        return self.value
-
-
-    def get_value_field(self):
-        if self.entry:
-            nothing_entered = (
-                self.int_part is None and 
-                self.frac_part is None and
-                not self.decimal_separator_pressed)
-
-            if nothing_entered:
-                v = round(self.old_value, self.num_decimal)
-                f = self.num_decimal
-                w = self.num_integer + self.num_decimal + 1
-                string = f'{v:{w}.{f}f}'
-                shaded = True
-            else:
-                if self.int_part is not None:
-                    i = self.int_part
-                else:
-                    i = ''
-                if self.decimal_separator_pressed:
-                    d = '.'
-                else:
-                    d = ' '
-                if self.frac_part is not None:
-                    f = self.frac_part
-                else:
-                    f = ''
-                ni = self.num_integer
-                nf = self.num_decimal
-                string = f'{i : >{ni}}{d}{f : <{nf}}'
-                shaded = False
-        else:
-            v = round(self.value, self.num_decimal)
-            f = self.num_decimal
-            w = self.num_integer + self.num_decimal + 1
-            string = f'{v:{w}.{f}f}'
-            shaded = False
-
-        return string, shaded, self.entry
+from enums import TargetMode, MotionState, Direction
+from motion import MotionController
+from ui import MainWindow
+from configuration import Configuration
 
 
 class Presenter(QObject):
-    def __init__(self, controller, left_stack, right_stack, *args, **kwargs):
+    def __init__(self, controller: MotionController, ui: MainWindow, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.motor_controller = controller
-        self.left_stack = left_stack
-        self.right_stack = right_stack
-
-        self.position_widget = left_stack.position
-        self.main_menu_widget = right_stack.main_menu
-        self.move_widget = right_stack.mode_move
-        self.position_keypad = right_stack.position_keypad
-        self.target_keypad = right_stack.target_keypad
-
-        self.position_field = AngleField(value=0.0)
-
-        self.current_target_field = AngleField(value=0.0)
-        self.divisions = []
-
-        self.powered = False
-        self.direction_cw = True
-
-        self.movement_mode = MovementMode.MANUAL_MOVE
-        self.motor_mode = MotorMode.UNPOWERED_IDLE
-        self.interface_mode = InterfaceMode.READY
-        
+        self.controller = controller
+        self.ui = ui
         self.timer = QTimer(self)
-        self.timer.setInterval(25)
+        self.timer.setInterval(200)
 
-        self.left_stack.show_position()
-        self.right_stack.show_movement()
-
+        self.setup_ui()
         self.setup_connections()
-        self.update_position_widget()
-        self.update_movement_widget()
+        self.timer.start()
 
 
     def setup_connections(self):
-        self.position_widget.position_pressed.connect(
-            self.position_pressed)
+        self.timer.timeout.connect(self.timeout)
 
-        self.position_widget.target_pressed.connect(
-            self.target_pressed)
-
-        self.position_widget.power_pressed.connect(
-            self.power_pressed)
-
-        self.position_widget.direction_pressed.connect(
-            self.direction_pressed)
-
-        self.main_menu_widget.item_pressed.connect(
-            self.menu_item_pressed)
-
-        self.move_widget.mode_pressed.connect(
-            self.main_menu_pressed)
-
-        self.move_widget.start_pressed.connect(
-            self.start_pressed)
-
-        self.move_widget.stop_pressed.connect(
-            self.stop_pressed)
-
-        self.move_widget.speed_increase.connect(
-            self.speed_increase_pressed)
-
-        self.move_widget.speed_decrease.connect(
-            self.speed_decrease_pressed)
-
-        self.position_keypad.keypress.connect(
-            self.handle_position_keypad)
-
-        self.target_keypad.keypress.connect(
-            self.handle_target_keypad)
-
-        self.timer.timeout.connect(
-            self.timeout)
+        self.ui.target_mode_set.connect(self.target_mode_changed)
+        self.ui.position_set.connect(self.position_set_in_ui)
+        self.ui.abs_target_set.connect(self.abs_target_set)
+        self.ui.rel_target_set.connect(self.rel_target_set)
+        self.ui.div_target_set.connect(self.div_target_set)
+        self.ui.div_parameters_set.connect(self.div_parameters_set)
+        self.ui.speed_set.connect(self.speed_set)
+        self.ui.cw_pressed.connect(self.cw_pressed)
+        self.ui.ccw_pressed.connect(self.ccw_pressed)
+        self.ui.power_pressed.connect(self.power_pressed)
+        self.ui.start_stop_pressed.connect(self.start_stop_pressed)
 
 
-    def switch_to_main_menu(self):
-        self.main_menu_widget.set_modes([x.value for x in MovementMode])
-        self.right_stack.show_main_menu()
-        self.left_stack.clear()
+    @pyqtSlot(TargetMode)
+    def target_mode_changed(self, mode):
+        self.controller.event_target_mode_set(mode)
+        if mode == TargetMode.ABSOLUTE:
+            self.update_abs_target()
+        elif mode == TargetMode.RELATIVE:
+            self.update_rel_target()
+        elif mode == TargetMode.DIVISION:
+            self.update_div_target()
+        self.update_divs()
+        self.update_motion_state()
+        print(f'mode changed to {mode}')
 
 
-    def switch_to_mode_manual(self):
-        self.movement_mode = MovementMode.MANUAL_MOVE
-        self.right_stack.show_movement()
-        self.left_stack.show_position()
-        self.update_movement_widget()
-        self.update_position_widget()
+    @pyqtSlot(float)
+    def position_set_in_ui(self, position):
+        self.controller.event_position_set(position)
+        self.update_position()
+        self.update_motion_state()
+        print(f'position changed to {position}')
 
 
-    def switch_to_mode_division(self):
-        self.movement_mode = MovementMode.DIVISION
-        if self.divisions:
-            self.right_stack.show_movement()
-            self.left_stack.show_position()
-            self.update_movement_widget()
-            self.update_position_widget()
-        else:
-            self.right_stack.clear()
-            self.left_stack.show_division()
+    @pyqtSlot(float)
+    def abs_target_set(self, target):
+        self.controller.event_target_set(target)
+        self.update_abs_target()
+        self.update_motion_state()
+        print(f'absolute target set to {target}')
 
 
-    def update_position_widget(self):
-        powered = self.motor_mode != MotorMode.UNPOWERED_IDLE
-        pos_val = self.position_field.get_value()
-        pos_str, pos_shd, pos_ent = self.position_field.get_value_field()
-        tgt_val = self.current_target_field.get_value()
-        tgt_str, tgt_shd, tgt_ent = self.current_target_field.get_value_field()
-        if self.movement_mode == MovementMode.DIVISION:
-            divs = self.divisions
-        else:
-            divs = []
-
-        self.position_widget.set_position_value(pos_val)
-        self.position_widget.set_position_field(pos_str, pos_shd, pos_ent)
-        self.position_widget.set_target_value(tgt_val)
-        self.position_widget.set_target_field(tgt_str, tgt_shd, tgt_ent)
-        self.position_widget.set_divisions(divs)
-        self.position_widget.set_power_state(powered)
-        self.position_widget.set_direction(self.direction_cw)
-
-        self.position_widget.update()
+    @pyqtSlot(float)
+    def rel_target_set(self, target):
+        self.controller.event_target_set(target)
+        self.update_rel_target()
+        self.update_motion_state()
+        print(f'relative target set to {target}')
 
 
-    def update_movement_widget(self):
-        mode_text = self.movement_mode.value
-        speed = self.motor_controller.get_speed()
-        target_visible = self.movement_mode == MovementMode.DIVISION
-        idle = self.idle()
-        startable = self.startable()
-        stoppable = self.motor_mode == MotorMode.MOVING
-
-        self.move_widget.set_mode(mode_text)
-        self.move_widget.set_speed(speed)
-        self.move_widget.set_speed_active(idle)
-        self.move_widget.set_target_visible(target_visible)
-        self.move_widget.set_target_active(idle)
-        self.move_widget.set_start_active(startable)
-        self.move_widget.set_stop_active(stoppable)
-        self.move_widget.update()
+    @pyqtSlot(int)
+    def div_target_set(self, target):
+        self.controller.event_target_set(target - 1)
+        self.update_div_target()
+        self.update_motion_state()
+        print(f'division target set to {target}')
 
 
-    def idle(self):
-        motor_idle = self.motor_mode in [MotorMode.UNPOWERED_IDLE,
-                                         MotorMode.POWERED_IDLE]
-
-        interface_ready = self.interface_mode == InterfaceMode.READY
-        return motor_idle and interface_ready
-
-
-    def powered_idle(self):
-        powered_idle = self.motor_mode == MotorMode.POWERED_IDLE
-        interface_ready = self.interface_mode == InterfaceMode.READY
-        return powered_idle and interface_ready
+    @pyqtSlot(int, float, float)
+    def div_parameters_set(self, num_divs, start_angle, extent):
+        self.controller.event_division_set(num_divs, start_angle, extent)
+        self.update_divs()
+        self.update_div_target()
+        self.update_motion_state()
+        print(f'division parameters set; {num_divs}, {start_angle}, {extent}')
 
 
-    def startable(self):
-        pos = self.position_field.get_value()
-        tgt = self.current_target_field.get_value()
-        return all([
-            self.motor_mode == MotorMode.POWERED_IDLE,
-            self.interface_mode == InterfaceMode.READY,
-            pos != tgt])
+    @pyqtSlot(float)
+    def speed_set(self, speed):
+        self.controller.event_speed_set(speed)
+        self.update_speed()
+        print(f'speed set to {speed}')
 
 
     @pyqtSlot()
-    def position_pressed(self):
-        if self.idle():
-            self.interface_mode = InterfaceMode.DATA_ENTRY
-
-            self.right_stack.show_position_keypad()
-            self.position_field.start_entering()
-
-            self.update_position_widget()
+    def cw_pressed(self):
+        self.controller.event_direction_set(Direction.CW)
+        self.update_direction()
+        if self.controller.get_target_mode() == TargetMode.RELATIVE:
+            self.update_rel_target()
+        print('direction clockwise')
 
 
     @pyqtSlot()
-    def target_pressed(self):
-        if self.idle():
-            self.interface_mode = InterfaceMode.DATA_ENTRY
-
-            self.right_stack.show_target_keypad()
-            self.current_target_field.start_entering()
-
-            self.update_position_widget()
+    def ccw_pressed(self):
+        self.controller.event_direction_set(Direction.CCW)
+        self.update_direction()
+        if self.controller.get_target_mode() == TargetMode.RELATIVE:
+            self.update_rel_target()
+        print('direction counter-clockwise')
 
 
     @pyqtSlot()
     def power_pressed(self):
-        if self.motor_mode == MotorMode.UNPOWERED_IDLE:
-            self.motor_mode = MotorMode.POWERED_IDLE
-            self.motor_controller.set_power_on()
-        else:
-            self.motor_mode = MotorMode.UNPOWERED_IDLE
-            self.motor_controller.set_power_off()
-        self.update_position_widget()
-        self.update_movement_widget()
-
+        self.controller.event_power()
+        self.update_progress()
+        self.update_motion_state()
+        print('power pressed')
 
 
     @pyqtSlot()
-    def direction_pressed(self):
-        if self.idle():
-            self.direction_cw = not self.direction_cw
-            self.update_position_widget()
-
-
-    @pyqtSlot(str)
-    def menu_item_pressed(self, item):
-        if item == MovementMode.MANUAL_MOVE.value:
-            self.switch_to_mode_manual()
-        elif item == MovementMode.DIVISION.value:
-            self.switch_to_mode_division()
-        else:
-            msg = f'Invalid main menu item selected ({item})'
-            raise RuntimeError(msg)
-
-
-    @pyqtSlot()
-    def main_menu_pressed(self):
-        if self.idle():
-            self.switch_to_main_menu()
-
-
-    @pyqtSlot()
-    def start_pressed(self):
-        if self.startable():
-            pos = self.position_field.get_value()
-            tgt = self.current_target_field.get_value()
-            self.motor_controller.set_position(pos)
-            self.motor_controller.set_target(tgt)
-            self.motor_controller.move(self.direction_cw)
-            self.motor_mode = MotorMode.MOVING
-            self.timer.start()
-            self.update_position_widget()
-            self.update_movement_widget()
-
-
-    @pyqtSlot()
-    def stop_pressed(self):
-        if self.motor_mode == MotorMode.MOVING:
-            self.motor_controller.stop()
-            pos = self.motor_controller.get_position()
-            self.position_field.set_value(pos)
-            self.motor_mode = MotorMode.POWERED_IDLE
-            self.timer.stop()
-            self.update_position_widget()
-            self.update_movement_widget()
-
-
-    @pyqtSlot()
-    def speed_increase_pressed(self):
-        if self.idle():
-            self.motor_controller.increase_speed()
-            self.update_movement_widget()
-
-
-    @pyqtSlot()
-    def speed_decrease_pressed(self):
-        if self.idle():
-            self.motor_controller.decrease_speed()
-            self.update_movement_widget()
+    def start_stop_pressed(self):
+        self.controller.event_start_stop()
+        self.update_progress()
+        self.update_motion_state()
+        print('start/stop pressed')
 
 
     @pyqtSlot()
     def timeout(self):
-        if self.motor_mode == MotorMode.MOVING:
-            if not self.motor_controller.moving():
-                self.timer.stop()
-                self.motor_mode = MotorMode.POWERED_IDLE
-                self.update_movement_widget()
-
-            pos = self.motor_controller.get_position()
-            self.position_field.set_value(pos)
-            self.update_position_widget()
+        self.controller.event_periodic()
+        self.update_position()
+        self.update_progress()
+        self.update_motion_state()
+        if self.controller.get_target_mode() == TargetMode.RELATIVE:
+            self.update_rel_target()
+        state = self.controller.get_motion_state()
+        moving_states = [MotionState.MOVING, MotionState.STOPPING]
+        if state in moving_states:
+            self.timer.setInterval(20)
         else:
-            self.timer.stop()
+            self.timer.setInterval(200)
 
 
-    @pyqtSlot(str)
-    def handle_position_keypad(self, str):
-        done = self.position_field.key_pressed(str)
-        self.update_position_widget()
-        if done:
-            self.interface_mode = InterfaceMode.READY
-            self.right_stack.show_movement()
-            self.update_movement_widget()
+    def setup_ui(self):
+        self.old_target_mode = None
+        self.update_target_mode()
+
+        self.old_position = None
+        self.update_position()
+
+        self.old_abs_target = None
+        self.update_abs_target()
+
+        self.old_rel_target = None
+        self.update_rel_target()
+
+        self.old_div_target = None
+        self.update_div_target()
+
+        self.old_divs = None
+        self.update_divs()
+
+        self.old_div_parameters = None
+        self.update_div_parameters()
+
+        self.old_speed = None
+        self.update_speed()
+
+        self.old_direction = None
+        self.update_direction()
+
+        self.old_motion_state = None
+        self.update_motion_state()
+
+        self.old_progress = None
+        self.update_progress()
 
 
-    @pyqtSlot(str)
-    def handle_target_keypad(self, str):
-        done = self.current_target_field.key_pressed(str)
-        self.update_position_widget()
-        if done:
-            self.interface_mode = InterfaceMode.READY
-            self.right_stack.show_movement()
-            self.update_movement_widget()
+    def update_target_mode(self):
+        target_mode = self.controller.get_target_mode()
+        if target_mode != self.old_target_mode:
+            self.ui.target_mode_updated(target_mode)
+        self.old_target_mode = target_mode
+
+
+    def update_position(self):
+        position = self.controller.get_position_angle()
+        if position != self.old_position:
+            self.ui.position_updated(position)
+        self.old_position = position
+
+
+    def update_abs_target(self):
+        target = self.controller.get_abs_target()
+        if target != self.old_abs_target:
+            self.ui.abs_target_updated(target)
+        self.old_abs_target = target
+
+
+    def update_rel_target(self):
+        target = self.controller.get_rel_target()
+        if target != self.old_rel_target:
+            abs_angle, rel_angle = target
+            self.ui.rel_target_updated(abs_angle, rel_angle)
+        self.old_rel_target = target
+
+
+    def update_div_target(self):
+        target = self.controller.get_div_target()
+        if target != self.old_div_target:
+            angle, index = target
+            self.ui.div_target_updated(angle, index + 1)
+        self.old_div_target = target
+
+
+    def update_divs(self):
+        divs = self.controller.get_divs()
+        if divs != self.old_divs:
+            self.ui.divs_updated(divs)
+        self.old_divs = divs
+
+
+    def update_div_parameters(self):
+        params = self.controller.get_div_parameters()
+        if params != self.old_div_parameters:
+            num_divs, start_angle, extent = params
+            self.ui.div_parameters_updated(num_divs, start_angle, extent)
+        self.old_div_params = params
+
+
+    def update_speed(self):
+        speed = self.controller.get_speed()
+        if speed != self.old_speed:
+            self.ui.speed_updated(speed)
+        self.old_speed = speed
+
+
+    def update_direction(self):
+        direction = self.controller.get_direction()
+        if direction != self.old_direction:
+            self.ui.direction_updated(direction)
+        self.old_direction = direction
+
+
+    def update_motion_state(self):
+        motion_state = self.controller.get_motion_state()
+        if motion_state != self.old_motion_state:
+            self.ui.motion_state_updated(motion_state)
+        self.old_motion_state = motion_state
+
+
+    def update_progress(self):
+        progress = self.controller.get_progress()
+        if progress != self.old_progress:
+            enabled, value = progress
+            self.ui.progress_updated(enabled, value)
+        self.old_progress = progress
