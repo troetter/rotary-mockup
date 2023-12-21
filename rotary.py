@@ -6,7 +6,7 @@ from ui import MainWindow
 from configuration import Configuration
 from presenter import Presenter
 from motion import MotionController
-from motor import FakeMotor
+from motor import FakeMotor, PololuT500
 import ui
 
 import argparse
@@ -14,6 +14,9 @@ import sys
 
 
 def main(config_file, fake=False):
+    from PyQt5.QtCore import pyqtRemoveInputHook
+    pyqtRemoveInputHook()
+    
     app = QApplication(sys.argv)
 
     ui = MainWindow()
@@ -24,7 +27,7 @@ def main(config_file, fake=False):
     if fake:
         motor = FakeMotor()
     else:
-        motor = None
+        motor = PololuT500()
 
     ctrl = MotionController(motor, config)
     pres = Presenter(ctrl, ui)

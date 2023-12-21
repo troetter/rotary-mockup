@@ -40,11 +40,11 @@ class Presenter(QObject):
     def target_mode_changed(self, mode):
         self.controller.event_target_mode_set(mode)
         if mode == TargetMode.ABSOLUTE:
-            self.update_abs_target()
+            self.update_abs_target(force=True)
         elif mode == TargetMode.RELATIVE:
-            self.update_rel_target()
+            self.update_rel_target(force=True)
         elif mode == TargetMode.DIVISION:
-            self.update_div_target()
+            self.update_div_target(force=True)
         self.update_divs()
         self.update_motion_state()
         print(f'mode changed to {mode}')
@@ -170,7 +170,7 @@ class Presenter(QObject):
         self.old_div_parameters = None
         self.update_div_parameters()
 
-        self.old_speed = None
+        self.old_speed_parameters = None
         self.update_speed()
 
         self.old_direction = None
@@ -197,24 +197,24 @@ class Presenter(QObject):
         self.old_position = position
 
 
-    def update_abs_target(self):
+    def update_abs_target(self, force=False):
         target = self.controller.get_abs_target()
-        if target != self.old_abs_target:
+        if target != self.old_abs_target or force:
             self.ui.abs_target_updated(target)
         self.old_abs_target = target
 
 
-    def update_rel_target(self):
+    def update_rel_target(self, force=False):
         target = self.controller.get_rel_target()
-        if target != self.old_rel_target:
+        if target != self.old_rel_target or force:
             abs_angle, rel_angle = target
             self.ui.rel_target_updated(abs_angle, rel_angle)
         self.old_rel_target = target
 
 
-    def update_div_target(self):
+    def update_div_target(self, force=False):
         target = self.controller.get_div_target()
-        if target != self.old_div_target:
+        if target != self.old_div_target or force:
             angle, index = target
             self.ui.div_target_updated(angle, index + 1)
         self.old_div_target = target
@@ -236,10 +236,11 @@ class Presenter(QObject):
 
 
     def update_speed(self):
-        speed = self.controller.get_speed()
-        if speed != self.old_speed:
-            self.ui.speed_updated(speed)
-        self.old_speed = speed
+        params = self.controller.get_speeds()
+        if params != self.old_speed_parameters:
+            speed, min_speed, max_speed = params
+            self.ui.speed_parameters_updated(speed, min_speed, max_speed)
+        self.old_speed_parameters = params
 
 
     def update_direction(self):

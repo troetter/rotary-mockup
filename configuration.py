@@ -12,15 +12,15 @@ class Configuration:
         self.populate_config()
 
     def populate_config(self):
-        # Read mechanical properties
+        # Read config
         mech = self.config_obj['Mechanical']
-        gearing = mech.getfloat('motor_revs_per_spindle_rev')
-        fullsteps = mech.getint('motor_fullsteps_per_rev')
-        microsteps = mech.getint('motor_microsteps_per_fullstep')
-        self.steps_per_rev = int(gearing * fullsteps * microsteps)
-
-        # Driver connection
         motor = self.config_obj['Motor']
+        gearing = mech.getfloat('motor_revs_per_spindle_rev')
+        fullsteps = motor.getint('fullsteps_per_rev')
+        microsteps = motor.getint('microsteps_per_fullstep')
+        self.steps_per_rev = int(gearing * fullsteps * microsteps)
+        self.microsteps = microsteps
+        self.max_current = motor.getint('max_current')
         self.start_speed = motor.getfloat('start_speed')
         self.min_speed = motor.getfloat('min_speed')
         self.max_speed = motor.getfloat('max_speed')

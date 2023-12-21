@@ -20,12 +20,18 @@ class Motor(object):
     def is_moving(self):
         raise NotImplementedError('implement in subclass')
     
+    def is_stopping(self):
+        raise NotImplementedError('implement in subclass')
+    
     def get_position(self):
         raise NotImplementedError('implement in subclass')
 
     def get_target_position(self):
         raise NotImplementedError('implement in subclass')
-    
+
+    def setup_driver(self, num_microsteps, max_current):
+        raise NotImplementedError('implement in subclass')
+
     def set_acceleration(self, acceleration):
         raise NotImplementedError('implement in subclass')
 
@@ -37,6 +43,143 @@ class Motor(object):
 
     def stop(self):
         raise NotImplementedError('implement in subclass')
+
+
+class PololuT500(Motor):
+    current_table = {
+        0:      0,
+        1:      1,
+        174:    2,
+        313:    3,
+        495:    4,
+        634:    5,
+        762:    6,
+        880:    7,
+        990:    8,
+        1092:   9,
+        1189:   10,
+        1281:   11,
+        1368:   12,
+        1452:   13,
+        1532:   14,
+        1611:   15,
+        1687:   16,
+        1762:   17,
+        1835:   18,
+        1909:   19,
+        1982:   20,
+        2056:   21,
+        2131:   22,
+        2207:   23,
+        2285:   24,
+        2366:   25,
+        2451:   26,
+        2540:   27,
+        2634:   28,
+        2734:   29,
+        2843:   30,
+        2962:   31,
+        3093:   32,
+    }
+
+    microstep_table = {
+        1: 0,
+        2: 1,
+        4: 2,
+        8: 3,
+    }
+
+    acceleration_factor = 100
+    speed_factor = 10000
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        import ticlib
+        self.device = ticlib.TicUSB()
+        self.device.deenergize()
+        self.stop_signal = False
+        for k, v in self.device.get_variables().items():
+            print(f'{k:40}: {v}')
+
+
+    def update_state(self):
+        if self.stop_signal:
+            vel = self.device.get_current_velocity()
+            if vel == 0:
+                self.stop_signal = False
+
+
+    def set_power_on(self):
+        self.device.energize()
+
+
+    def set_power_off(self):
+        self.device.deenergize()
+
+
+    def is_energized(self):
+        op_state = self.device.get_operation_state()
+        return op_state == 10
+
+
+    def is_moving(self):
+        vel = self.device.get_current_velocity()
+        return vel != 0
+
+
+    def is_stopping(self):
+        return self.stop_signal
+
+
+    def get_position(self):
+        return self.device.get_current_position()
+
+
+    def get_target_position(self):
+        return self.device.get_target_position()
+
+
+    def setup_driver(self, num_microsteps, max_current):
+        if num_microsteps in self.microstep_table:
+            value = self.microstep_table[num_microsteps]
+            self.device.set_step_mode(value)
+        else:
+            raise ValueError('num_microsteps is invalid, check datasheet')
+        
+        if max_current in self.current_table:
+            value = self.current_table[max_current]
+        else:
+            currents = reversed(sorted(self.current_table.keys()))
+            i = 0
+            while currents[i] < max_current:
+                i += 1
+            value = self.current_table[currents[i]]
+            print(f'current {max_current} not selectable, using {value}')
+        self.device.set_current_limit(value)
+
+
+    def set_acceleration(self, acceleration):
+        value = acceleration * self.acceleration_factor
+        self.device.set_max_acceleration(int(value))
+        self.device.set_max_deceleration(0)
+
+
+    def set_start_speed(self, start_speed):
+        value = start_speed * self.speed_factor
+        self.device.set_starting_speed(int(value))
+
+
+    def start_move_to_position(self, target_position, top_speed):
+        value = top_speed * self.speed_factor
+        self.device.set_max_speed(int(value))
+        self.device.set_target_position(int(target_position))
+        for k, v in self.device.get_variables().items():
+            print(f'{k:40}: {v}')
+
+
+    def stop(self):
+        self.device.set_target_velocity(0)
+        self.stop_signal = True        
 
 
 class FakeMotor(Motor):
@@ -202,3 +345,7 @@ class FakeMotor(Motor):
             self.position = int(self.start_position + moved_dist)
         else:
             self.position = int(self.start_position - moved_dist)
+
+
+    def setup_driver(self, num_microsteps, max_current):
+        pass

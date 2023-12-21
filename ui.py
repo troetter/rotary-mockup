@@ -461,9 +461,10 @@ class MainWindow(QMainWindow):
 
 
     @pyqtSlot(float)
-    def speed_updated(self, value):
+    def speed_parameters_updated(self, speed, min_speed, max_speed):
         with QSignalBlocker(self.speed_spinbox):
-            self.speed_spinbox.setValue(value)
+            self.speed_spinbox.setValue(speed)
+            self.speed_spinbox.setRange(min_speed, max_speed)
 
 
     @pyqtSlot(MotionState)

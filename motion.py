@@ -20,6 +20,8 @@ class MotionController(object):
 
         self.direction = Direction.CW
         self.speed = self.config.default_speed
+        self.min_speed = self.config.min_speed
+        self.max_speed = self.config.max_speed
 
         self.setup_motor()
 
@@ -38,21 +40,16 @@ class MotionController(object):
 
 
     def event_start_stop(self):
-        valid_states = [
-            MotionState.READY_TO_MOVE,
-            MotionState.MOVING
-        ]
-
-        if self.motion_state not in valid_states:
-            raise RuntimeError('Invalid event for state')
-
         if self.motion_state == MotionState.READY_TO_MOVE:
             self.start_reg = self.motor.get_position()
             tgt_reg = self.target_reg
             speed = self.speed * self.steps_per_deg
             self.motor.start_move_to_position(tgt_reg, speed)
-        else:
+        elif self.motion_state == MotionState.MOVING:
             self.motor.stop()
+        else:
+            # Invalid state, return quietly
+            return
         self.evaluate_state_transition()
 
 
@@ -156,6 +153,9 @@ class MotionController(object):
         if self.motion_state not in valid_states:
             raise RuntimeError('Invalid event for state')
 
+        if speed < self.min_speed or speed > self.max_speed:
+            raise RuntimeError('Speed out of range')
+
         self.speed = speed
 
 
@@ -199,8 +199,8 @@ class MotionController(object):
         return self.direction
 
 
-    def get_speed(self):
-        return self.speed
+    def get_speeds(self):
+        return self.speed, self.min_speed, self.max_speed
 
 
     def get_motion_state(self):
@@ -230,12 +230,15 @@ class MotionController(object):
         steps_per_deg = self.config.steps_per_rev / 360
         accel = self.config.acceleration * steps_per_deg
         start_speed = self.config.start_speed * steps_per_deg
-
+        microsteps = self.config.microsteps
+        max_current = self.config.max_current
+        self.motor.setup_driver(microsteps, max_current)
         self.motor.set_acceleration(accel)
         self.motor.set_start_speed(start_speed)
         motor_pos = self.motor.get_position()
         self.position_anchor = 0, motor_pos
         self.steps_per_deg = steps_per_deg
+        self.target_reg = motor_pos
 
 
     def evaluate_state_transition(self):
@@ -311,11 +314,11 @@ class MotionController(object):
         target_reg = self.angle_to_reg(target_angle)
         revs = int(position_reg / steps_per_rev)
 
-        tgt_cw = (revs - 1) * steps_per_rev + target_reg
+        tgt_cw = (revs - 1) * steps_per_rev + (target_reg % steps_per_rev)
         while tgt_cw < position_reg:
             tgt_cw += steps_per_rev
 
-        tgt_ccw = (revs + 1) * steps_per_rev + target_reg
+        tgt_ccw = (revs + 1) * steps_per_rev + (target_reg % steps_per_rev)
         while tgt_ccw > position_reg:
             tgt_ccw -= steps_per_rev
 
