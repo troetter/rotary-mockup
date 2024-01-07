@@ -6,7 +6,7 @@ from ui import MainWindow
 from configuration import Configuration
 from presenter import Presenter
 from motion import MotionController
-from motor import FakeMotor, PololuT500
+from motor import FakeMotor, PololuT249
 import ui
 
 import argparse
@@ -27,7 +27,7 @@ def main(config_file, fake=False):
     if fake:
         motor = FakeMotor()
     else:
-        motor = PololuT500()
+        motor = PololuT249()
 
     ctrl = MotionController(motor, config)
     pres = Presenter(ctrl, ui)

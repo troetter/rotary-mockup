@@ -1,5 +1,6 @@
 import math
 from datetime import datetime
+from itertools import chain
 
 class Motor(object):
     def __init__(self, *args, **kwargs):
@@ -45,64 +46,40 @@ class Motor(object):
         raise NotImplementedError('implement in subclass')
 
 
-class PololuT500(Motor):
-    current_table = {
-        0:      0,
-        1:      1,
-        174:    2,
-        313:    3,
-        495:    4,
-        634:    5,
-        762:    6,
-        880:    7,
-        990:    8,
-        1092:   9,
-        1189:   10,
-        1281:   11,
-        1368:   12,
-        1452:   13,
-        1532:   14,
-        1611:   15,
-        1687:   16,
-        1762:   17,
-        1835:   18,
-        1909:   19,
-        1982:   20,
-        2056:   21,
-        2131:   22,
-        2207:   23,
-        2285:   24,
-        2366:   25,
-        2451:   26,
-        2540:   27,
-        2634:   28,
-        2734:   29,
-        2843:   30,
-        2962:   31,
-        3093:   32,
-    }
-
-    microstep_table = {
-        1: 0,
-        2: 1,
-        4: 2,
-        8: 3,
-    }
-
+class PololuT249(Motor):
     acceleration_factor = 100
     speed_factor = 10000
+
+    microstep_table = {
+        1:  0,
+        2:  1,
+        4:  2,
+        8:  3,
+        16: 4,
+        32: 5,
+    }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         import ticlib
         self.device = ticlib.TicUSB()
+
+        if self.device.usb.idProduct != ticlib.TIC_T249:
+            raise RuntimeError('Unknown Pololu device')
+
+        #self.device.reset_command_timeout()
+        #self.device.exit_safe_start()
         self.device.deenergize()
+        self.device.halt_and_set_position(0)
+        self.device.set_target_position(0)
         self.stop_signal = False
         for k, v in self.device.get_variables().items():
             print(f'{k:40}: {v}')
 
 
     def update_state(self):
+        self.device.reset_command_timeout()
+        self.device.exit_safe_start()
         if self.stop_signal:
             vel = self.device.get_current_velocity()
             if vel == 0:
@@ -111,10 +88,14 @@ class PololuT500(Motor):
 
     def set_power_on(self):
         self.device.energize()
+        for k, v in self.device.get_variables().items():
+            print(f'{k:40}: {v}')
 
 
     def set_power_off(self):
         self.device.deenergize()
+        for k, v in self.device.get_variables().items():
+            print(f'{k:40}: {v}')
 
 
     def is_energized(self):
@@ -142,19 +123,28 @@ class PololuT500(Motor):
     def setup_driver(self, num_microsteps, max_current):
         if num_microsteps in self.microstep_table:
             value = self.microstep_table[num_microsteps]
-            self.device.set_step_mode(value)
         else:
             raise ValueError('num_microsteps is invalid, check datasheet')
+        self.device.set_step_mode(value)
         
-        if max_current in self.current_table:
-            value = self.current_table[max_current]
+        r = chain(range(0, 32), range(32, 64, 2), range(64, 128, 4))
+        allowed_vals = list(r)
+        requested_value = int(max_current / 40)
+        max_value = int(4480 / 40)
+
+        if requested_value > max_value:
+            value = max_value
+        elif requested_value in allowed_vals:
+            value = requested_value
         else:
-            currents = reversed(sorted(self.current_table.keys()))
             i = 0
-            while currents[i] < max_current:
+            while allowed_vals[i + 1] < requested_value:
                 i += 1
-            value = self.current_table[currents[i]]
-            print(f'current {max_current} not selectable, using {value}')
+            value = allowed_vals[i]
+
+        current = value * 40
+        if current != max_current:
+            print(f'current {max_current} not selectable, using {current}')
         self.device.set_current_limit(value)
 
 
@@ -171,10 +161,12 @@ class PololuT500(Motor):
 
     def start_move_to_position(self, target_position, top_speed):
         value = top_speed * self.speed_factor
+        max_value = 50000 * 10000
+        if value > max_value:
+            print('Speed out of range, constraining')
+            value = max_value
         self.device.set_max_speed(int(value))
         self.device.set_target_position(int(target_position))
-        for k, v in self.device.get_variables().items():
-            print(f'{k:40}: {v}')
 
 
     def stop(self):
